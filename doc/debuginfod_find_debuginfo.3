@@ -165,8 +165,9 @@ The value may be NULL.
 The current URL of the outgoing download
 may be retrieved via
 .BR \%debuginfod_get_url ()
-from a progress callback function.  The resulting string, if not
-NULL, is owned by the library, must not be modified or freed.
+from a progress callback function.  The resulting string, if not NULL,
+is owned by the library, so must not be modified or freed.  The client
+should copy it if it is needed beyond the callback function.
 
 .SS "HTTP HEADER"
 
