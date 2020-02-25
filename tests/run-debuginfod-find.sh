@@ -23,11 +23,13 @@ type rpm2cpio 2>/dev/null || (echo "need rpm2cpio"; exit 77)
 type bzcat 2>/dev/null || (echo "need bzcat"; exit 77)
 
 # for test case debugging, uncomment:
-# set -x
-# VERBOSE=-vvvv
+set -x
+VERBOSE=-vvvv
 
 DB=${PWD}/.debuginfod_tmp.sqlite
 tempfiles $DB
+LOGFILE1=${PWD}/.debuginfod1.log
+tempfiles $LOGFILE1
 export DEBUGINFOD_CACHE_PATH=${PWD}/.client_cache
 
 PID1=0
@@ -93,7 +95,7 @@ wait_ready()
   fi
 }
 
-env LD_LIBRARY_PATH=$ldpath DEBUGINFOD_URLS= ${abs_builddir}/../debuginfod/debuginfod $VERBOSE -F -R -d $DB -p $PORT1 -t0 -g0 --fdcache-fds 1 --fdcache-mbs 2 -Z .tar.xz -Z .tar.bz2=bzcat R F Z L &
+env LD_LIBRARY_PATH=$ldpath DEBUGINFOD_URLS= ${abs_builddir}/../debuginfod/debuginfod $VERBOSE -F -R -d $DB -p $PORT1 -t0 -g0 --fdcache-fds 1 --fdcache-mbs 2 -Z .tar.xz -Z .tar.bz2=bzcat R F Z L >  $LOGFILE1 2>&1 &
 PID1=$!
 # Server must become ready
 wait_ready $PORT1 'ready' 1
@@ -167,7 +169,7 @@ wait_ready $PORT1 'thread_busy{role="scan"}' 0
 filename=`testrun ${abs_top_builddir}/debuginfod/debuginfod-find -v debuginfo $BUILDID2 2>vlog`
 cmp $filename F/prog2
 cat vlog
-grep -q Progress vlog
+grep -q Progress.http vlog
 tempfiles vlog
 filename=`testrun env DEBUGINFOD_PROGRESS=1 ${abs_top_builddir}/debuginfod/debuginfod-find executable $BUILDID2 2>vlog2`
 cmp $filename F/prog2
@@ -321,7 +323,14 @@ fi
 rm -rf $DEBUGINFOD_CACHE_PATH
 testrun ${abs_top_builddir}/debuginfod/debuginfod-find debuginfo $BUILDID
 
-# confirm that first server can't resolve symlinked info in L/ but second can
+# send a request to stress XFF and User-Agent federation relay;
+# we'll grep for the two patterns in $TESTLOG1
+curl -s -H 'User-Agent: TESTCURL' -H 'X-Forwarded-For: TESTXFF' $DEBUGINFOD_URLS/buildid/deaddeadbeef00000000/debuginfo -o /dev/null || true
+
+grep -q UA:TESTCURL $LOGFILE1
+grep -q XFF:TESTXFF $LOGFILE1
+
+# confirm that first server cannot resolve symlinked info in L/ but second can
 BUILDID=`env LD_LIBRARY_PATH=$ldpath ${abs_builddir}/../src/readelf \
          -a L/foo | grep 'Build ID' | cut -d ' ' -f 7`
 file L/foo
@@ -357,6 +366,7 @@ curl -s http://127.0.0.1:$PORT2/metrics | grep -q 'http_responses_total.*result.
 
 kill -INT $PID1 $PID2
 wait $PID1 $PID2
+cat $LOGFILE1 # so it's not lost
 PID1=0
 PID2=0
 tempfiles .debuginfod_*

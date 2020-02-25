@@ -1,6 +1,6 @@
 /* Command-line frontend for retrieving ELF / DWARF / source files
    from the debuginfod.
-   Copyright (C) 2019 Red Hat, Inc.
+   Copyright (C) 2019-2020 Red Hat, Inc.
    This file is part of elfutils.
 
    This file is free software; you can redistribute it and/or modify
@@ -52,10 +52,12 @@ static const struct argp_option options[] =
 /* debuginfod connection handle.  */
 static debuginfod_client *client;
 
-int progressfn(debuginfod_client *c __attribute__((__unused__)),
+int progressfn(debuginfod_client *c,
 	       long a, long b)
 {
-  fprintf (stderr, "Progress %ld / %ld\n", a, b);
+  const char *s = (const char *) debuginfod_get_user_data (c);
+  const char* url = debuginfod_get_url (c) ?: "?";
+  fprintf (stderr, "%s %s %ld / %ld\n", s, url, a, b);
   return 0;
 }
 
@@ -91,6 +93,9 @@ main(int argc, char** argv)
       return 1;
     }
 
+  /* exercise user data pointer */
+  debuginfod_set_user_data (client, (void *)"Progress");
+  
   int remaining;
   (void) argp_parse (&argp, argc, argv, ARGP_IN_ORDER|ARGP_NO_ARGS, &remaining, NULL);
 
@@ -130,6 +135,8 @@ main(int argc, char** argv)
       return 1;
     }
 
+  debuginfod_end (client);
+
   if (rc < 0)
     {
       fprintf(stderr, "Server query failed: %s\n", strerror(-rc));
@@ -137,9 +144,7 @@ main(int argc, char** argv)
     }
 
   printf("%s\n", cache_name);
-
   free (cache_name);
-  debuginfod_end (client);
 
   return 0;
 }

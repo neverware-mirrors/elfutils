@@ -74,10 +74,21 @@
   #include <fts.h>
 #endif
 
+
 struct debuginfod_client
 {
   /* Progress/interrupt callback function. */
   debuginfod_progressfn_t progressfn;
+
+  /* Stores user data. */
+  void* user_data;
+
+  /* Accumulates outgoing http header names/values. */
+  int user_agent_set_p; /* affects add_default_headers */
+  struct curl_slist *headers;
+
+  /* The 'winner' CURL handle for downloading, if any. */
+  CURL *target_handle;
 
   /* Can contain all other context, like cache_path, server_urls,
      timeout or other info gotten from environment variables, the
@@ -291,8 +302,11 @@ debuginfod_clean_cache(debuginfod_client *c,
 
 
 static void
-add_extra_headers(CURL *handle)
+add_default_headers(debuginfod_client *client)
 {
+  if (client->user_agent_set_p)
+    return;
+
   /* Compute a User-Agent: string to send.  The more accurately this
      describes this host, the likelier that the debuginfod servers
      might be able to locate debuginfo for us. */
@@ -352,7 +366,7 @@ add_extra_headers(CURL *handle)
     }
 
   char *ua = NULL;
-  rc = asprintf(& ua, "%s/%s,%s,%s/%s",
+  rc = asprintf(& ua, "User-Agent: %s/%s,%s,%s/%s",
                 PACKAGE_NAME, PACKAGE_VERSION,
                 utspart ?: "",
                 id ?: "",
@@ -361,7 +375,7 @@ add_extra_headers(CURL *handle)
     ua = NULL;
 
   if (ua)
-    curl_easy_setopt(handle, CURLOPT_USERAGENT, (void*) ua); /* implicit strdup */
+    (void) debuginfod_add_http_header (client, ua);
 
   free (ua);
   free (id);
@@ -532,9 +546,6 @@ debuginfod_query_server (debuginfod_client *c,
         && (i == 0 || server_urls[i - 1] == url_delim_char))
       num_urls++;
 
-  /* Tracks which handle should write to fd. Set to the first
-     handle that is ready to write the target file to the cache.  */
-  CURL *target_handle = NULL;
   struct handle_data *data = malloc(sizeof(struct handle_data) * num_urls);
 
   /* Initalize handle_data with default values. */
@@ -556,10 +567,11 @@ debuginfod_query_server (debuginfod_client *c,
   char *server_url = strtok_r(server_urls, url_delim, &strtok_saveptr);
 
   /* Initialize each handle.  */
-  for (int i = 0; i < num_urls && server_url != NULL; i++)
+  c->target_handle = NULL; /* reset for this lookup */
+ for (int i = 0; i < num_urls && server_url != NULL; i++)
     {
       data[i].fd = fd;
-      data[i].target_handle = &target_handle;
+      data[i].target_handle = &c->target_handle;
       data[i].handle = curl_easy_init();
 
       if (data[i].handle == NULL)
@@ -603,7 +615,7 @@ debuginfod_query_server (debuginfod_client *c,
       curl_easy_setopt(data[i].handle, CURLOPT_NOSIGNAL, (long) 1);
       curl_easy_setopt(data[i].handle, CURLOPT_AUTOREFERER, (long) 1);
       curl_easy_setopt(data[i].handle, CURLOPT_ACCEPT_ENCODING, "");
-      add_extra_headers(data[i].handle);
+      curl_easy_setopt(data[i].handle, CURLOPT_HTTPHEADER, c->headers);
 
       curl_multi_add_handle(curlm, data[i].handle);
       server_url = strtok_r(NULL, url_delim, &strtok_saveptr);
@@ -618,9 +630,9 @@ debuginfod_query_server (debuginfod_client *c,
       curl_multi_wait(curlm, NULL, 0, 1000, NULL);
 
       /* If the target file has been found, abort the other queries.  */
-      if (target_handle != NULL)
+      if (c->target_handle != NULL)
         for (int i = 0; i < num_urls; i++)
-          if (data[i].handle != target_handle)
+          if (data[i].handle != c->target_handle)
             curl_multi_remove_handle(curlm, data[i].handle);
 
       CURLMcode curlm_res = curl_multi_perform(curlm, &still_running);
@@ -640,19 +652,19 @@ debuginfod_query_server (debuginfod_client *c,
           loops ++;
           long pa = loops; /* default params for progress callback */
           long pb = 0; /* transfer_timeout tempting, but loops != elapsed-time */
-          if (target_handle) /* we've committed to a server; report its download progress */
+          if (c->target_handle) /* we've committed to a server; report its download progress */
             {
               CURLcode curl_res;
 #ifdef CURLINFO_SIZE_DOWNLOAD_T
               curl_off_t dl;
-              curl_res = curl_easy_getinfo(target_handle,
+              curl_res = curl_easy_getinfo(c->target_handle,
                                            CURLINFO_SIZE_DOWNLOAD_T,
                                            &dl);
               if (curl_res == 0 && dl >= 0)
                 pa = (dl > LONG_MAX ? LONG_MAX : (long)dl);
 #else
               double dl;
-              curl_res = curl_easy_getinfo(target_handle,
+              curl_res = curl_easy_getinfo(c->target_handle,
                                            CURLINFO_SIZE_DOWNLOAD,
                                            &dl);
               if (curl_res == 0)
@@ -663,14 +675,14 @@ debuginfod_query_server (debuginfod_client *c,
                  number is likely to be unavailable, so -1 may show. */
 #ifdef CURLINFO_CURLINFO_CONTENT_LENGTH_DOWNLOAD_T
               curl_off_t cl;
-              curl_res = curl_easy_getinfo(target_handle,
+              curl_res = curl_easy_getinfo(c->target_handle,
                                            CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
                                            &cl);
               if (curl_res == 0 && cl >= 0)
                 pb = (cl > LONG_MAX ? LONG_MAX : (long)cl);
 #else
               double cl;
-              curl_res = curl_easy_getinfo(target_handle,
+              curl_res = curl_easy_getinfo(c->target_handle,
                                            CURLINFO_CONTENT_LENGTH_DOWNLOAD,
                                            &cl);
               if (curl_res == 0)
@@ -720,7 +732,7 @@ debuginfod_query_server (debuginfod_client *c,
               long resp_code = 500;
               CURLcode curl_res;
 
-              curl_res = curl_easy_getinfo(target_handle,
+              curl_res = curl_easy_getinfo(c->target_handle,
                                            CURLINFO_RESPONSE_CODE,
                                            &resp_code);
 
@@ -759,6 +771,7 @@ debuginfod_query_server (debuginfod_client *c,
     }
 
   /* Success!!!! */
+  c->target_handle = NULL;
   for (int i = 0; i < num_urls; i++)
     curl_easy_cleanup(data[i].handle);
 
@@ -774,9 +787,9 @@ debuginfod_query_server (debuginfod_client *c,
 
 /* error exits */
  out1:
+  c->target_handle = NULL;
   for (int i = 0; i < num_urls; i++)
     curl_easy_cleanup(data[i].handle);
-
   curl_multi_cleanup(curlm);
   unlink (target_cache_tmppath);
   close (fd); /* before the rmdir, otherwise it'll fail */
@@ -795,11 +808,16 @@ debuginfod_query_server (debuginfod_client *c,
 static int
 default_progressfn (debuginfod_client *c, long a, long b)
 {
-  (void) c;
+  const char* url = debuginfod_get_url (c) ?: "debuginfod";
 
-  dprintf(STDERR_FILENO,
-          "Downloading from debuginfod %ld/%ld%s", a, b,
-          ((a == b) ? "\n" : "\r"));
+  if (b == 0)
+    dprintf(STDERR_FILENO,
+            "Downloading from %s %c\r", url, "-/|\\"[a % 4]);
+  else
+    dprintf(STDERR_FILENO,
+            "Downloading from %s %ld/%ld%s",
+             url, a, b,
+            ((a == b) ? "\n" : "\r"));
   /* XXX: include URL - stateful */
 
   return 0;
@@ -812,13 +830,11 @@ debuginfod_begin (void)
 {
   debuginfod_client *client;
   size_t size = sizeof (struct debuginfod_client);
-  client = (debuginfod_client *) malloc (size);
+  client = (debuginfod_client *) calloc (1, size); /* clear */
   if (client != NULL)
     {
       if (getenv(DEBUGINFOD_PROGRESS_ENV_VAR))
 	client->progressfn = default_progressfn;
-      else
-	client->progressfn = NULL;
     }
   return client;
 }
@@ -826,6 +842,10 @@ debuginfod_begin (void)
 void
 debuginfod_end (debuginfod_client *client)
 {
+  if (client) /* make it safe to be invoked with NULL */
+    {
+      curl_slist_free_all (client->headers);
+    }
   free (client);
 }
 
@@ -834,6 +854,7 @@ debuginfod_find_debuginfo (debuginfod_client *client,
 			   const unsigned char *build_id, int build_id_len,
                            char **path)
 {
+  add_default_headers(client);
   return debuginfod_query_server(client, build_id, build_id_len,
                                  "debuginfo", NULL, path);
 }
@@ -845,6 +866,7 @@ debuginfod_find_executable(debuginfod_client *client,
 			   const unsigned char *build_id, int build_id_len,
                            char **path)
 {
+  add_default_headers(client);
   return debuginfod_query_server(client, build_id, build_id_len,
                                  "executable", NULL, path);
 }
@@ -854,6 +876,7 @@ int debuginfod_find_source(debuginfod_client *client,
 			   const unsigned char *build_id, int build_id_len,
                            const char *filename, char **path)
 {
+  add_default_headers(client);
   return debuginfod_query_server(client, build_id, build_id_len,
                                  "source", filename, path);
 }
@@ -864,6 +887,50 @@ debuginfod_set_progressfn(debuginfod_client *client,
 			  debuginfod_progressfn_t fn)
 {
   client->progressfn = fn;
+}
+
+
+void
+debuginfod_set_user_data(debuginfod_client *client,
+                         void *data)
+{
+  client->user_data = data;
+}
+
+
+void *
+debuginfod_get_user_data(debuginfod_client *client)
+{
+  return client->user_data;
+}
+
+
+const char *
+debuginfod_get_url(debuginfod_client *client)
+{
+  const char *url = NULL;
+  if (client->target_handle)
+    (void) curl_easy_getinfo (client->target_handle, CURLINFO_EFFECTIVE_URL, &url);
+
+  return url;
+}
+
+
+
+/* Add an outgoing HTTP header.  */
+int debuginfod_add_http_header (debuginfod_client *client, const char* header)
+{
+  struct curl_slist *temp = curl_slist_append (client->headers, header);
+  if (temp == NULL)
+    return -ENOMEM;
+
+  /* Track if User-Agent: is being set.  If so, signal not to add the
+     default one. */
+  if (strncmp (header, "User-Agent:", 11) == 0)
+    client->user_agent_set_p = 1;
+
+  client->headers = temp;
+  return 0;
 }
 
 

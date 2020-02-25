@@ -1,5 +1,5 @@
 /* External declarations for the libdebuginfod client library.
-   Copyright (C) 2019 Red Hat, Inc.
+   Copyright (C) 2019-2020 Red Hat, Inc.
    This file is part of elfutils.
 
    This file is free software; you can redistribute it and/or modify
@@ -71,9 +71,22 @@ int debuginfod_find_source (debuginfod_client *client,
                             const char *filename,
                             char **path);
 
+/* Set a progress callback function. */
 typedef int (*debuginfod_progressfn_t)(debuginfod_client *c, long a, long b);
 void debuginfod_set_progressfn(debuginfod_client *c,
 			       debuginfod_progressfn_t fn);
+
+/* Add an outgoing HTTP request  "Header: Value".  Copies string.  */
+int debuginfod_add_http_header (debuginfod_client *client, const char* header);
+
+/* Return currently active URL, if known.  String owned by curl, do not free.  */
+const char* debuginfod_get_url (debuginfod_client *client);
+
+/* Set the user parameter.  */
+void debuginfod_set_user_data (debuginfod_client *client, void *value);
+
+/* Get the user parameter.  */
+void* debuginfod_get_user_data (debuginfod_client *client);
 
 /* Release debuginfod client connection context handle.  */
 void debuginfod_end (debuginfod_client *client);
