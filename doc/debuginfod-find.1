@@ -52,6 +52,13 @@ Then the hexadecimal BUILDID is simply:
 8713b9c3fb8a720137a4a08b325905c7aaf8429d
 .ESAMPLE
 
+In place of the hexadecimal buildid, debuginfod-find also accepts a path
+name to to an ELF binary, from which it will then extract the buildid
+and proceed.  In this case, pass the file name in place of the BUILDID
+parameter, and ensure it has some character other than \fB[0-9a-f]\fP.
+Files named \fBdeadbeef\fP can be passed with a \fB./deadbeef\fP extra
+path component.
+
 .SS debuginfo \fIBUILDID\fP
 
 If the given buildid is known to a server, this request will result

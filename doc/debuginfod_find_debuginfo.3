@@ -71,11 +71,19 @@ and
 query the debuginfod server URLs contained in
 .BR $DEBUGINFOD_URLS
 (see below) for the debuginfo, executable or source file with the
-given \fIbuild_id\fP. \fIbuild_id\fP should be a pointer to either
-a null-terminated, lowercase hex string or a binary blob. If
-\fIbuild_id\fP is given as a hex string, \fIbuild_id_len\fP should
-be 0. Otherwise \fIbuild_id_len\fP should be the number of bytes in
-the binary blob.
+given \fIbuild_id\fP. \fIbuild_id\fP may be given as:
+.TP
+a binary blob
+pass its address and length in bytes in \fIbuild_id_len\fP.
+.TP
+a null-terminated hexadecimal string
+pass its address and 0 as \fIbuild_id_len\fP.  Ensure the
+string contains only \fB[0-9a-f]\fP characters.
+.TP
+an file name of an ELF binary containing the build-id
+pass its name and 0 as \fIbuild_id_len\fP.  Ensure the name
+contains some non-\fB[0-9a-f]\fP characters.
+.P
 
 .BR debuginfod_find_source ()
 also requries a \fIfilename\fP in order to specify a particular

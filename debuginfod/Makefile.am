@@ -62,7 +62,7 @@ debuginfod_SOURCES = debuginfod.cxx
 debuginfod_LDADD = $(libdw) $(libelf) $(libeu) $(libdebuginfod) $(libmicrohttpd_LIBS) $(libcurl_LIBS) $(sqlite3_LIBS) $(libarchive_LIBS) -lpthread -ldl
 
 debuginfod_find_SOURCES = debuginfod-find.c
-debuginfod_find_LDADD = $(libeu) $(libdebuginfod)
+debuginfod_find_LDADD = $(libeu) $(libdebuginfod) $(libelf)
 
 noinst_LIBRARIES = libdebuginfod.a
 noinst_LIBRARIES += libdebuginfod_pic.a
@@ -74,7 +74,7 @@ am_libdebuginfod_pic_a_OBJECTS = $(libdebuginfod_a_SOURCES:.c=.os)
 pkginclude_HEADERS = debuginfod.h
 
 libdebuginfod_so_LIBS = libdebuginfod_pic.a
-libdebuginfod_so_LDLIBS = $(libcurl_LIBS)
+libdebuginfod_so_LDLIBS = $(libcurl_LIBS) $(libdw) $(libelf) $(libeu)
 libdebuginfod.so$(EXEEXT): $(srcdir)/libdebuginfod.map $(libdebuginfod_so_LIBS)
 	$(AM_V_CCLD)$(LINK) $(dso_LDFLAGS) -o $@ \
 		-Wl,--soname,$@.$(VERSION) \

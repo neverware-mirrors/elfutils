@@ -61,6 +61,8 @@
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <curl/curl.h>
+#include <gelf.h>
+#include <libdwelf.h>
 
 /* If fts.h is included before config.h, its indirect inclusions may not
    give us the right LFS aliases of these functions, so map them manually.  */
@@ -436,6 +438,43 @@ default_progressfn (debuginfod_client *c, long a, long b)
 }
 
 
+static int
+lookup_elf_buildid(const char* path,
+                   char *build_id_hex,
+                   ssize_t max_build_id_bytes)
+{
+  int rc = -ENOENT;
+  int fd = open (path, O_RDONLY);
+  if (fd < 0)
+    goto out;
+  Elf *elf =  elf_begin (fd, ELF_C_READ_MMAP_PRIVATE, NULL);
+  if (elf == NULL)
+    goto out1;
+  const unsigned char *build_id;
+  ssize_t s = dwelf_elf_gnu_build_id(elf, (const void**) &build_id);
+  if (s < 0 || s > max_build_id_bytes) {
+    rc = -EINVAL;
+    goto out2;
+  }
+  ssize_t i;
+  for (i=0; i<s; i++)
+    {
+      build_id_hex[2*i+0] = "0123456789abcdef"[(build_id[i]&0xF0) >> 4];
+      build_id_hex[2*i+1] = "0123456789abcdef"[(build_id[i]&0x0F) >> 0];
+    }
+  build_id_hex[2*i] = '\0';
+  rc = 0;
+
+ out2:
+  elf_end (elf);
+ out1:
+  close (fd);
+ out:
+  return rc;
+}
+
+
+
 /* Query each of the server URLs found in $DEBUGINFOD_URLS for the file
    with the specified build-id, type (debuginfo, executable or source)
    and filename. filename may be NULL. If found, return a file
@@ -474,16 +513,43 @@ debuginfod_query_server (debuginfod_client *c,
       goto out;
     }
 
-  /* Copy lowercase hex representation of build_id into buf.  */
-  if ((build_id_len >= MAX_BUILD_ID_BYTES) ||
-      (build_id_len == 0 &&
-       sizeof(build_id_bytes) > MAX_BUILD_ID_BYTES*2 + 1))
-    return -EINVAL;
-  if (build_id_len == 0) /* expect clean hexadecimal */
-    strcpy (build_id_bytes, (const char *) build_id);
-  else
-    for (int i = 0; i < build_id_len; i++)
-      sprintf(build_id_bytes + (i * 2), "%02x", build_id[i]);
+  if (build_id_len > 0) /* raw bytes */
+    {
+      if (build_id_len > MAX_BUILD_ID_BYTES) /* too man raw bytes */
+        return -EINVAL;
+      int i;
+      for (i = 0; i < build_id_len; i++)
+        {
+          build_id_bytes[2*i+0] = "0123456789abcdef"[(build_id[i]&0xF0) >> 4];
+          build_id_bytes[2*i+1] = "0123456789abcdef"[(build_id[i]&0x0F) >> 0];
+        }
+       build_id_bytes[2*i] = '\0';
+    }
+  else if (build_id_len == 0) /* \0-terminated string */
+    {
+      int any_non_hex = 0;
+      for (int i = 0; build_id[i] != '\0'; i++)
+        if ((build_id[i] >= '0' && build_id[i] <= '9') ||
+            (build_id[i] >= 'a' && build_id[i] <= 'f'))
+          ;
+        else
+          any_non_hex = 1;
+
+      if (any_non_hex) /* a path name --- try to fetch its buildid */
+        {
+          rc = lookup_elf_buildid ((const char*) build_id,
+                                   build_id_bytes,
+                                   MAX_BUILD_ID_BYTES);
+          if (rc != 0)
+            return rc;
+        }
+      else /* hexadecimal string */
+        {
+          if (strlen((const char*) build_id) >= sizeof(build_id_bytes))
+            return -EINVAL;
+          strcpy (build_id_bytes, (const char*)build_id);
+        }
+    }
 
   if (filename != NULL)
     {

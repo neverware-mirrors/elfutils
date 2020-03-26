@@ -26,6 +26,7 @@
 #include <string.h>
 #include <argp.h>
 
+#include <gelf.h>
 
 /* Name and version of program.  */
 ARGP_PROGRAM_VERSION_HOOK_DEF = print_version;
@@ -86,6 +87,8 @@ static struct argp argp =
 int
 main(int argc, char** argv)
 {
+  elf_version (EV_CURRENT);
+
   client = debuginfod_begin ();
   if (client == NULL)
     {

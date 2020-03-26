@@ -1,3 +1,12 @@
+2020-03-25  Frank Ch. Eigler  <fche@redhat.com>
+
+	* debuginfod-client.c (lookup_elf_buildid): Quick dwelf based
+	filename-to-buildid lookup function.
+	(debuginfod_query_server): Use it for non-hexstring buildids.
+	* debuginfod-find.c (main): Call elf_version().
+	* Makefile.am: Add elfutils library prereqs for libdebuginfod.so
+	and debuginfod-find.
+
 2020-03-24  Frank Ch. Eigler  <fche@redhat.com>
 
 	* debuginfod-client.c (debuginfod_query_server): Print the
